@@ -19,6 +19,7 @@ package exec
 import (
 	"context"
 	"fmt"
+	"github.com/sirupsen/logrus"
 	"path"
 	"runtime"
 	"strconv"
@@ -85,6 +86,11 @@ blade create cpu load --cpu-percent 60`,
 				&spec.ExpFlag{
 					Name:     "climb-time",
 					Desc:     "durations(s) to climb",
+					Required: false,
+				},
+				&spec.ExpFlag{
+					Name:     "limits-cpu",
+					Desc:     "limits-cpu",
 					Required: false,
 				},
 			},
@@ -158,6 +164,8 @@ func (ce *cpuExecutor) Exec(uid string, ctx context.Context, model *spec.ExpMode
 	var cpuList string
 	var cpuPercent int
 	var climbTime int
+	var limitsCpu int
+	logrus.Infof("cpu limitsCpu:%v",limitsCpu)
 
 	cpuPercentStr := model.ActionFlags["cpu-percent"]
 	if cpuPercentStr != "" {
@@ -215,15 +223,40 @@ func (ce *cpuExecutor) Exec(uid string, ctx context.Context, model *spec.ExpMode
 			return spec.ResponseFailWithFlags(spec.ParameterIllegal, "climb-time", climbTimeStr, "must be a positive integer and not bigger than 600")
 		}
 	}
+	limitsCpuStr := model.ActionFlags["limits-cpu"]
+	if limitsCpuStr != "" {
+		if !strings.Contains(limitsCpuStr,"m") {
+			var err error
+			logrus.Infof("limitsCpuStr:%s",limitsCpuStr)
+			limitsCpu, err = strconv.Atoi(limitsCpuStr)
+			logrus.Infof("limitsCpu:%v",limitsCpu)
+			if err != nil {
+				util.Errorf(uid, util.GetRunFuncName(), fmt.Sprintf("`%s`: limits-cpu is illegal, ", limitsCpuStr))
+				return spec.ResponseFailWithFlags(spec.ParameterIllegal, "limits-cpu", climbTimeStr, "it must be a positive integer")
+			}
+		}else {
+			s := limitsCpuStr[:len(limitsCpuStr)-2]
+			var err error
+			limitsCpu, err = strconv.Atoi(s)
+			logrus.Infof("limitsCpu:%v",limitsCpu)
+			if err != nil {
+				util.Errorf(uid, util.GetRunFuncName(), fmt.Sprintf("`%s`: limits-cpu is illegal, ", s))
+				return spec.ResponseFailWithFlags(spec.ParameterIllegal, "limits-cpu", s, "it must be a positive integer")
+			}
+		}
+	}
 
-	return ce.start(ctx, cpuList, cpuCount, cpuPercent, climbTime)
+	return ce.start(ctx, cpuList, cpuCount, cpuPercent, climbTime,limitsCpu)
 }
 
 // start burn cpu
-func (ce *cpuExecutor) start(ctx context.Context, cpuList string, cpuCount int, cpuPercent int, climbTime int) *spec.Response {
+func (ce *cpuExecutor) start(ctx context.Context, cpuList string, cpuCount int, cpuPercent int, climbTime int,limitsCpu int) *spec.Response {
 	args := fmt.Sprintf("--start --climb-time %d --cpu-count %d --cpu-percent %d --debug=%t", climbTime, cpuCount, cpuPercent, util.Debug)
 	if cpuList != "" {
 		args = fmt.Sprintf("%s --cpu-list %s", args, cpuList)
+	}
+	if limitsCpu != 0 {
+		args = fmt.Sprintf("%s --limits-cpu %d",args,limitsCpu)
 	}
 	return ce.channel.Run(ctx, path.Join(ce.channel.GetScriptPath(), BurnCpuBin), args)
 }

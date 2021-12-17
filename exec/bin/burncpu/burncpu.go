@@ -45,6 +45,7 @@ var (
 	slopePercent                            float64
 	cpuList                                 string
 	cpuProcessor                            string
+	limitsCpu																string
 )
 
 func main() {
@@ -56,6 +57,7 @@ func main() {
 	flag.IntVar(&cpuCount, "cpu-count", runtime.NumCPU(), "number of cpus")
 	flag.IntVar(&cpuPercent, "cpu-percent", 100, "percent of burn-cpu")
 	flag.StringVar(&cpuProcessor, "cpu-processor", "0", "only used for identifying process of cpu burn")
+	flag.StringVar(&limitsCpu,"limits-cpu","0","pod limits cpu")
 	bin.ParseFlagAndInitLog()
 
 	if cpuCount <= 0 || cpuCount > runtime.NumCPU() {
@@ -76,8 +78,37 @@ func main() {
 }
 
 func burnCpu() {
-
-	runtime.GOMAXPROCS(cpuCount)
+	if limitsCpu != "" {
+		if !strings.Contains(limitsCpu,"m") {
+			atoi, err := strconv.Atoi(limitsCpu)
+			if err != nil {
+				runtime.GOMAXPROCS(cpuCount)
+			}else {
+				runtime.GOMAXPROCS(atoi)
+			}
+		}else {
+			s := limitsCpu[:len(limitsCpu)-2]
+			atoi, err := strconv.Atoi(s)
+			if err == nil {
+				if atoi >= 1000{
+					count := atoi / 1000
+					if atoi % 1000 != 0 {
+						runtime.GOMAXPROCS(count+1)
+						cpuPercent = (cpuPercent * atoi)/(count * 1000)
+					}else {
+						runtime.GOMAXPROCS(count)
+					}
+				}else {
+					runtime.GOMAXPROCS(1)
+					cpuPercent = (cpuPercent * atoi)/1000
+				}
+			}else {
+				runtime.GOMAXPROCS(cpuCount)
+			}
+		}
+	}else {
+		runtime.GOMAXPROCS(cpuCount)
+	}
 
 	var totalCpuPercent []float64
 	var curProcess *process.Process
@@ -119,7 +150,6 @@ func burnCpu() {
 			}
 		}
 	}()
-
 	if climbTime == 0 {
 		slopePercent = float64(cpuPercent)
 	} else {
@@ -136,7 +166,6 @@ func burnCpu() {
 			}
 		}()
 	}
-
 	for i := 0; i < cpuCount; i++ {
 		go func() {
 			busy := int64(0)
@@ -187,21 +216,24 @@ func startBurnCpu() {
 		cpuCount = 1
 		cores := strings.Split(cpuList, ",")
 		for _, core := range cores {
-			pid := runBurnCpuFunc(ctx, cpuCount, cpuPercent, true, core, climbTime)
+			pid := runBurnCpuFunc(ctx, cpuCount, cpuPercent, true, core, climbTime,limitsCpu)
 			bindBurnCpuFunc(ctx, core, pid)
 		}
 	} else {
-		runBurnCpuFunc(ctx, cpuCount, cpuPercent, false, "", climbTime)
+		runBurnCpuFunc(ctx, cpuCount, cpuPercent, false, "", climbTime,limitsCpu)
 	}
 	checkBurnCpuFunc(ctx)
 }
 
 // runBurnCpu
-func runBurnCpu(ctx context.Context, cpuCount int, cpuPercent int, pidNeeded bool, processor string, climbTime int) int {
+func runBurnCpu(ctx context.Context, cpuCount int, cpuPercent int, pidNeeded bool, processor string, climbTime int,limitsCpu string) int {
 	args := fmt.Sprintf(`%s --nohup --cpu-count %d --cpu-percent %d --climb-time %d`,
 		path.Join(util.GetProgramPath(), burnCpuBin), cpuCount, cpuPercent, climbTime)
 	if pidNeeded {
 		args = fmt.Sprintf("%s --cpu-processor %s", args, processor)
+	}
+	if limitsCpu != "" {
+		args = fmt.Sprintf("%s --limits-cpu %s", args, limitsCpu)
 	}
 	args = fmt.Sprintf(`%s > /dev/null 2>&1 &`, args)
 	response := cl.Run(ctx, "nohup", args)
